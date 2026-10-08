@@ -18,6 +18,10 @@ log = logging.getLogger(__name__)
 # Idle 轮询间隔（秒），对齐 Go 的 IdlePollInterval = 500ms
 IDLE_POLL_INTERVAL = 0.5
 
+# Idle 超时时间（秒），teammate 等待新任务的最长时间
+# 设置较短的超时避免用户感觉卡顿
+IDLE_TIMEOUT = 5.0
+
 # shutdown 消息前缀，对齐 Go 的 ShutdownPrefix
 SHUTDOWN_PREFIX = "[shutdown]"
 
@@ -59,9 +63,20 @@ async def _wait_for_next_prompt_or_shutdown(
 
     对齐 Go 的 waitForNextPromptOrShutdown：循环 sleep + 检查邮箱。
     收到 shutdown 消息返回 ("", True)；否则把普通消息拼成下一轮的 prompt。
+
+    增加超时机制：如果等待超过 IDLE_TIMEOUT 秒仍无新消息，自动退出。
     """
+    import time
+    start_time = time.monotonic()
+
     while True:
         await asyncio.sleep(IDLE_POLL_INTERVAL)
+
+        # 检查超时
+        elapsed = time.monotonic() - start_time
+        if elapsed >= IDLE_TIMEOUT:
+            log.info("Teammate %s idle timeout after %.1fs, shutting down", member_name, elapsed)
+            return "", True
 
         msgs = mailbox.consume(member_name)
         if not msgs:

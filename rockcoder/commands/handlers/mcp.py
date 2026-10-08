@@ -18,13 +18,14 @@ async def handle_mcp(ctx: CommandContext) -> None:
     mcp_mgr = getattr(app, "mcp_manager", None)
     if mcp_mgr and hasattr(mcp_mgr, "_clients"):
         for name, client in mcp_mgr._clients.items():
+            # 修复：使用单下划线前缀匹配，对齐 MCPToolWrapper 的命名
             tool_names = [
                 t.name for t in ctx.agent.registry.list_tools()
-                if t.name.startswith(f"mcp__{name}__")
+                if t.name.startswith(f"mcp_{name}_")
             ]
             lines.append(f"\n  {name}: {len(tool_names)} tools")
             for tn in tool_names[:10]:
-                short = tn.replace(f"mcp__{name}__", "")
+                short = tn.replace(f"mcp_{name}_", "")
                 lines.append(f"    - {short}")
             if len(tool_names) > 10:
                 lines.append(f"    … and {len(tool_names) - 10} more")

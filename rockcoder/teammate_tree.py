@@ -4,6 +4,7 @@ from __future__ import annotations
 from textual.widget import Widget
 from textual.reactive import reactive
 from rich.text import Text
+from rich.markup import escape
 
 from rockcoder.teams.progress import TeammateProgress
 
@@ -52,7 +53,9 @@ class TeammateTree(Widget):
             elif p.status == "idle":
                 lines.append("idle", style="dim")
             else:
-                lines.append(f"{p.activity_summary}…", style="dim")
+                # Escape markup in activity summary to prevent Rich parsing errors
+                activity = escape(p.activity_summary)
+                lines.append(f"{activity}…", style="dim")
 
             lines.append(
                 f" · {p.tool_use_count} tools"

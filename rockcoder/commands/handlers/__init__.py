@@ -6,6 +6,7 @@ from rockcoder.commands.handlers.clear import CLEAR_COMMAND
 from rockcoder.commands.handlers.compact import COMPACT_COMMAND
 from rockcoder.commands.handlers.help import HELP_COMMAND
 from rockcoder.commands.handlers.mcp import MCP_COMMAND
+from rockcoder.commands.handlers.mcp_config import MCP_CONFIG_COMMAND
 from rockcoder.commands.handlers.memory import MEMORY_COMMAND
 from rockcoder.commands.handlers.permission import PERMISSION_COMMAND
 from rockcoder.commands.handlers.plan import PLAN_COMMAND
@@ -26,6 +27,7 @@ ALL_COMMANDS = [
     SESSION_COMMAND,
     RESUME_COMMAND,
     MCP_COMMAND,
+    MCP_CONFIG_COMMAND,
     MEMORY_COMMAND,
     PERMISSION_COMMAND,
     REVIEW_COMMAND,

@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
+import sys
+from enum import Enum
+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:
+    # Backport for Python 3.10
+    class StrEnum(str, Enum):
+        pass
 
 
 class LifecycleEvent(StrEnum):

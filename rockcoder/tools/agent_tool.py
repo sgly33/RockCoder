@@ -453,21 +453,49 @@ class AgentTool(Tool):
         )
         self._team_manager.register_member(p.team_name, member)
 
-        task_id = self._task_manager.launch(
-            agent=sub_agent,
-            task="" if is_fork else p.prompt,
-            name=teammate_name,
-            fork_conversation=conversation if is_fork else None,
-        )
+        # 获取team的mailbox用于长驻teammate通信
+        mailbox = self._team_manager.get_mailbox(p.team_name)
+
+        if mailbox is None:
+            # 降级：mailbox不可用时使用传统单次执行模式
+            log.warning("Mailbox not available for team %s, using single-shot mode", p.team_name)
+            task_id = self._task_manager.launch(
+                agent=sub_agent,
+                task="" if is_fork else p.prompt,
+                name=teammate_name,
+                fork_conversation=conversation if is_fork else None,
+            )
+            backend_note = "single-shot (mailbox unavailable)"
+        else:
+            # 使用长驻teammate模式
+            from rockcoder.teams.spawn_inprocess import spawn_inprocess_teammate
+
+            handle = spawn_inprocess_teammate(
+                agent=sub_agent,
+                prompt="" if is_fork else p.prompt,
+                name=teammate_name,
+                conversation=conversation if is_fork else None,
+                member=member,
+                team_name=p.team_name,
+                mailbox=mailbox,
+            )
+
+            task_id = self._task_manager.adopt_teammate_handle(
+                handle=handle,
+                agent=sub_agent,
+                task_description=p.prompt,
+                name=teammate_name,
+            )
+            backend_note = "long-running (idle after completion, responds to SendMessage)"
 
         return ToolResult(
             output=(
                 f"Teammate '{teammate_name}' spawned in team '{p.team_name}'.\n"
                 f"Agent ID: {agent_id}\n"
-                f"Backend: {backend.value}\n"
+                f"Backend: {backend_note}\n"
                 f"Worktree: {wt.path}\n"
                 f"Task ID: {task_id}\n"
-                "The system will notify when it completes."
+                "The system will notify when initial task completes."
             )
         )
 

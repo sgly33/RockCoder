@@ -70,8 +70,10 @@ class MCPToolWrapper(Tool):
         self.category = "command"
         self.is_concurrency_safe = False
         self.should_defer = True
+        # 修复：MCP Tool 对象使用 input_schema (snake_case)
+        input_schema = getattr(tool_def, 'inputSchema', None) or tool_def.input_schema
         self.params_model = _build_params_model(
-            tool_def.name, tool_def.inputSchema
+            tool_def.name, input_schema
         )
 
     @property
@@ -80,10 +82,12 @@ class MCPToolWrapper(Tool):
 
 
     def get_schema(self) -> dict[str, Any]:
+        # 修复：使用正确的属性名
+        input_schema = getattr(self._tool_def, 'inputSchema', None) or self._tool_def.input_schema
         return {
             "name": self.name,
             "description": self.description,
-            "input_schema": self._tool_def.inputSchema,
+            "input_schema": input_schema,
         }
 
 

@@ -97,24 +97,6 @@ class TaskManager:
                     )
                     mailbox.write("lead", msg)
 
-                    for _ in range(60):
-                        await asyncio.sleep(1)
-                        msgs = mailbox.consume(bg.agent.agent_id)
-                        if not msgs:
-                            continue
-                        prompt = "\n\n".join(
-                            f"[Message from {m.from_agent}] {m.content}" for m in msgs
-                        )
-                        result = await bg.agent.run_to_completion(prompt)
-                        bg.result = result
-                        msg = create_message(
-                            from_agent=bg.name,
-                            to_agent="lead",
-                            content=f"[idle] {bg.name}: completed follow-up",
-                            summary=f"{bg.name} idle",
-                        )
-                        mailbox.write("lead", msg)
-
         except asyncio.CancelledError:
             bg.status = "cancelled"
             bg.result = "Task was cancelled"
@@ -173,6 +155,85 @@ class TaskManager:
             bg.progress.input_tokens = bg.agent.total_input_tokens
             bg.progress.output_tokens = bg.agent.total_output_tokens
             self._async_tasks.pop(task_id, None)
+            await self._notify_queue.put(task_id)
+
+    def adopt_teammate_handle(
+        self,
+        handle: Any,
+        agent: Agent,
+        task_description: str,
+        name: str = "",
+    ) -> str:
+        """接管一个已经由spawn_inprocess_teammate启动的teammate。
+
+        让TaskManager跟踪外部启动的teammate，以便UI可以通过poll_completed()检测完成。
+
+        Args:
+            handle: InProcessTeammateHandle对象
+            agent: Agent实例
+            task_description: 任务描述
+            name: 任务名称
+
+        Returns:
+            task_id: 任务ID
+        """
+        task_id = uuid.uuid4().hex[:8]
+        bg = BackgroundTask(
+            id=task_id,
+            name=name or task_id,
+            agent=agent,
+            task=task_description,
+        )
+        self._tasks[task_id] = bg
+
+        # 注册teammate的asyncio.Task
+        self._async_tasks[task_id] = handle.task
+
+        # 设置cancel回调
+        bg.cancel = handle.cancel
+
+        # 启动监控任务
+        asyncio.create_task(self._monitor_teammate(task_id, handle))
+
+        log.info("Adopted teammate handle: task_id=%s name=%s", task_id, name)
+        return task_id
+
+    async def _monitor_teammate(self, task_id: str, handle: Any) -> None:
+        """监控teammate的完成状态，完成后发送通知。
+
+        Args:
+            task_id: 任务ID
+            handle: InProcessTeammateHandle对象
+        """
+        bg = self._tasks.get(task_id)
+        if bg is None:
+            return
+
+        try:
+            # 等待teammate的task完成
+            result = await handle.task
+            bg.result = result or ""
+            bg.status = "completed"
+            log.info("Teammate %s completed", task_id)
+        except asyncio.CancelledError:
+            bg.status = "cancelled"
+            bg.result = "Teammate was cancelled"
+            log.info("Teammate %s cancelled", task_id)
+        except Exception as e:
+            log.error("Teammate task %s failed: %s", task_id, e)
+            bg.status = "failed"
+            bg.result = f"Error: {e}"
+        finally:
+            bg.end_time = time.monotonic()
+
+            # 更新token统计
+            bg.progress.input_tokens = bg.agent.total_input_tokens
+            bg.progress.output_tokens = bg.agent.total_output_tokens
+
+            # 移除async_task引用
+            self._async_tasks.pop(task_id, None)
+
+            # 发送完成通知
             await self._notify_queue.put(task_id)
 
     def get(self, task_id: str) -> BackgroundTask | None:

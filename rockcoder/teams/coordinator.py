@@ -49,7 +49,7 @@ def get_coordinator_system_prompt(agent_catalog: list[tuple[str, str]] | None = 
             "- **general-purpose** (or omit subagent_type): general worker for research and implementation\n"
             "- **Verification**: read-only verification specialist — cannot edit files, focuses on finding bugs"
         )
-    return """You are RockCoder, a LangGraph-based AI assistant that orchestrates software engineering tasks across multiple workers.
+    return """You are RockCoder, an AI assistant that orchestrates software engineering tasks across multiple workers.
 
 ## 1. Your Role
 

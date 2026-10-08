@@ -1227,7 +1227,7 @@ class RockCoderApp(App):
                     await self._agent_task
                 except (asyncio.CancelledError, Exception):
                     pass
-            self._finish_streaming()
+            self._finish_streaming(False)  # Cancel a real user message
             self._show_system_message("(response interrupted)")
         await self._dispatch_command(text)
 
@@ -1445,7 +1445,9 @@ class RockCoderApp(App):
             self._show_system_message("Waiting for MCP servers to connect...")
             await self._mcp_init_task
 
-        self._streaming = True
+        # Only set streaming flag for real user messages, not notification-triggered calls
+        if not is_notification:
+            self._streaming = True
         chat = self.query_one("#chat-area", VerticalScroll)
         input_widget = self.query_one("#chat-input", ChatInput)
 
@@ -1492,23 +1494,25 @@ class RockCoderApp(App):
         tool_blocks: dict[str, ToolCallBlock] = {}
 
         # 在聊天区底部启动持续旋转的加载动画
-        self._thinking_start = _time.monotonic()
-        self._thinking_verb = random.choice(THINKING_VERBS)
-        self._spinner_idx = 0
-        self._spinner_label = Static(
-            f"  {SPINNER_FRAMES[0]} {self._thinking_verb}…",
-            id="spinner-live",
-        )
-        await chat.mount(self._spinner_label)
+        # BUT: skip spinner/teammate tree if this is a notification-triggered call
+        if not is_notification:
+            self._thinking_start = _time.monotonic()
+            self._thinking_verb = random.choice(THINKING_VERBS)
+            self._spinner_idx = 0
+            self._spinner_label = Static(
+                f"  {SPINNER_FRAMES[0]} {self._thinking_verb}…",
+                id="spinner-live",
+            )
+            await chat.mount(self._spinner_label)
 
-        # Mount teammate tree (initially hidden) below the spinner
-        self._teammate_tree = TeammateTree(id="teammate-tree")
-        self._teammate_tree.display = False
-        await chat.mount(self._teammate_tree)
-        self._start_teammate_polling()
+            # Mount teammate tree (initially hidden) below the spinner
+            self._teammate_tree = TeammateTree(id="teammate-tree")
+            self._teammate_tree.display = False
+            await chat.mount(self._teammate_tree)
+            self._start_teammate_polling()
 
-        self.call_after_refresh(chat.scroll_end, animate=False)
-        self._start_spinner()
+            self.call_after_refresh(chat.scroll_end, animate=False)
+            self._start_spinner()
 
         await asyncio.sleep(0)
 
@@ -1680,16 +1684,26 @@ class RockCoderApp(App):
         except LLMError as e:
             self._show_error(str(e))
         finally:
-            self._finish_streaming()
+            self._finish_streaming(is_notification)
             input_widget.focus()
 
-            await self._process_task_notifications()
+            # Only process task notifications if this was NOT triggered by a notification
+            # to avoid infinite loops
+            if not is_notification:
+                await self._process_task_notifications()
 
     async def _process_task_notifications(self) -> None:
         completed = self.task_manager.poll_completed()
         if not completed or self.agent is None:
             return
 
+        import logging
+        log = logging.getLogger(__name__)
+        log.info("Processing %d completed tasks. streaming=%s, agent_task_done=%s",
+                 len(completed), self._streaming,
+                 self._agent_task is None or self._agent_task.done())
+
+        # Always inject notifications into conversation
         inject_task_notifications(self.conversation, completed)
 
         for task in completed:
@@ -1701,30 +1715,40 @@ class RockCoderApp(App):
             if hasattr(self, 'team_manager'):
                 self.team_manager.on_teammate_completed(task.agent.agent_id)
 
-        self._agent_task = asyncio.create_task(
-            self._send_message("", is_notification=True)
-        )
+        # Only trigger coordinator response if completely idle
+        # If streaming or agent_task is running, notifications will be processed
+        # in the next conversation turn (they're already injected above)
+        if not self._streaming and (not self._agent_task or self._agent_task.done()):
+            log.info("Triggering coordinator response for %d completed tasks", len(completed))
+            self._agent_task = asyncio.create_task(
+                self._send_message("", is_notification=True)
+            )
+        else:
+            log.warning("Cannot trigger coordinator: streaming=%s, agent_task_exists=%s, agent_task_done=%s",
+                       self._streaming, self._agent_task is not None,
+                       self._agent_task.done() if self._agent_task else None)
 
     async def _start_notification_polling(self) -> None:
         while True:
-            await asyncio.sleep(2)
-            if not self._streaming and self.agent is not None:
+            await asyncio.sleep(0.5)
+            if self.agent is not None:
                 await self._process_task_notifications()
                 await self._process_mailbox_notifications()
 
     async def _process_mailbox_notifications(self) -> None:
         if not hasattr(self, "team_manager") or self.team_manager is None:
             return
-        if self._streaming or self.agent is None:
+        if self.agent is None:
             return
         notes = self.team_manager.drain_lead_mailbox()
         if not notes:
             return
         for note in notes:
             self.conversation.add_system_reminder(note)
-        self._agent_task = asyncio.create_task(
-            self._send_message("", is_notification=True)
-        )
+        if not self._streaming:
+            self._agent_task = asyncio.create_task(
+                self._send_message("", is_notification=True)
+            )
 
     async def _show_plan_approval(self) -> None:
         from rockcoder.plan_dialog import InlinePlanWidget
@@ -1837,12 +1861,16 @@ class RockCoderApp(App):
             self._spinner_timer.stop()
             self._spinner_timer = None
 
-    def _finish_streaming(self) -> None:
+    def _finish_streaming(self, is_notification: bool = False) -> None:
         """清理所有 streaming 状态（取消或完成时调用）。"""
-        self._streaming = False
+        # Only clear streaming flag if it was actually set
+        # (notification-triggered calls don't set it)
+        if not is_notification:
+            self._streaming = False
         self._stop_spinner()
         self._stop_teammate_polling()
-        self._agent_task = None
+        # Don't set _agent_task to None here - let it finish naturally
+        # self._agent_task = None
         if self._teammate_tree is not None:
             self._teammate_tree.remove()
             self._teammate_tree = None
@@ -2062,7 +2090,7 @@ class RockCoderApp(App):
             if self._agent_task and not self._agent_task.done():
                 self._agent_task.cancel()
             self._show_system_message("(response interrupted)")
-            self._finish_streaming()
+            self._finish_streaming(False)  # Cancel a real user message
             try:
                 inp = self.query_one("#chat-input", ChatInput)
                 inp.disabled = False
