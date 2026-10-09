@@ -11,8 +11,9 @@ from rockcoder.agent import PermissionResponse
 
 
 _PERM_OPTIONS = [
-    ("Yes", PermissionResponse.ALLOW),
-    ("Yes, and don't ask again for this pattern", PermissionResponse.ALLOW_ALWAYS),
+    ("Yes (only this time)", PermissionResponse.ALLOW),
+    ("Yes, always allow this exact command", PermissionResponse.ALLOW_ALWAYS),
+    ("Yes, always allow similar commands", PermissionResponse.ALLOW_ALL_TYPE),
     ("No", PermissionResponse.DENY),
 ]
 
@@ -32,6 +33,7 @@ class InlinePermissionWidget(Vertical, can_focus=True):
         Binding("1", "choose_1", priority=True),
         Binding("2", "choose_2", priority=True),
         Binding("3", "choose_3", priority=True),
+        Binding("4", "choose_4", priority=True),
     ]
 
     class Responded(Message):
@@ -41,10 +43,11 @@ class InlinePermissionWidget(Vertical, can_focus=True):
             super().__init__()
             self.response = response
 
-    def __init__(self, tool_name: str, description: str, **kwargs) -> None:
+    def __init__(self, tool_name: str, description: str, command_prefix: str = "", **kwargs) -> None:
         super().__init__(id="perm-inline", **kwargs)
         self._tool_name = tool_name
         self._description = description
+        self._command_prefix = command_prefix
         self._cursor = 0
 
     def compose(self) -> ComposeResult:
@@ -64,6 +67,9 @@ class InlinePermissionWidget(Vertical, can_focus=True):
         for i, (label, _resp) in enumerate(_PERM_OPTIONS):
             if i == self._cursor:
                 lines.append(f" [bold cyan]❯[/bold cyan] {i + 1}. [bold]{label}[/bold]")
+                # 如果是第三个选项（索引2）并且有命令前缀，显示示例
+                if i == 2 and self._command_prefix:
+                    lines.append(f"      [dim]Will allow: {self._command_prefix}[/dim]")
             else:
                 lines.append(f"   {i + 1}. [dim]{label}[/dim]")
 
@@ -96,6 +102,9 @@ class InlinePermissionWidget(Vertical, can_focus=True):
 
     def action_choose_3(self) -> None:
         self.post_message(self.Responded(_PERM_OPTIONS[2][1]))
+
+    def action_choose_4(self) -> None:
+        self.post_message(self.Responded(_PERM_OPTIONS[3][1]))
 
     def action_deny(self) -> None:
         self.post_message(self.Responded(PermissionResponse.DENY))

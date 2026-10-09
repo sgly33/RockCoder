@@ -139,13 +139,17 @@ class PermissionResponse(Enum):
     ALLOW = "allow"
     DENY = "deny"
     ALLOW_ALWAYS = "allow_always"
+    ALLOW_ALL_TYPE = "allow_all_type"
 
 
+@dataclass
 @dataclass
 class PermissionRequest:
     tool_name: str
     description: str
     future: asyncio.Future[PermissionResponse]
+    pattern_prefix: str = ""  # 用于生成规则的模式前缀
+    command_prefix: str = ""  # 用于界面显示的示例描述
 
 
 AgentEvent = (
@@ -960,6 +964,44 @@ class Agent:
         """为 HITL 权限确认生成人类可读的操作描述。"""
         return PermissionChecker.describe_tool_action(tc.tool_name, tc.arguments)
 
+    def _extract_pattern_info(self, tool_name: str, content: str) -> tuple[str, str]:
+        """提取用于生成模式匹配规则的信息。
+
+        返回：(pattern_prefix, example_description)
+        - pattern_prefix: 用于生成规则的前缀部分
+        - example_description: 用户界面显示的示例描述（空字符串表示不适用）
+        """
+        # 如果没有有效内容，返回空示例
+        if not content or not content.strip():
+            return "", ""
+
+        # 通过工具查找其 category
+        tool = self.registry.get(tool_name)
+
+        # 对于文件操作工具（读写编辑），提取目录路径
+        if tool and tool.category in ("read", "write"):
+            import os
+            # content 是文件路径
+            if os.path.sep in content or "/" in content:
+                dir_path = os.path.dirname(content) or "."
+                pattern = f"{dir_path}/*"
+                example = f"all files in {dir_path}/"
+                return pattern, example
+            else:
+                # 单个文件名，无目录
+                return content, f"files like {content}"
+
+        # 对于命令类工具（Bash），提取命令前缀
+        parts = content.strip().split()
+        if len(parts) == 0:
+            return "", ""
+        elif len(parts) == 1:
+            return parts[0], f"{parts[0]} commands"
+        else:
+            # 提取前两个词作为前缀（例如 "npm install", "git commit"）
+            prefix = f"{parts[0]} {parts[1]}"
+            return prefix, f"{prefix} <any-args>"
+
     async def _execute_single_tool_direct(
         self, tc: ToolCallComplete
     ) -> _ToolExecResult:
@@ -1051,11 +1093,17 @@ class Agent:
                 loop = asyncio.get_running_loop()
                 future: asyncio.Future[PermissionResponse] = loop.create_future()
                 desc = self._build_permission_description(tc)
+                # 提取模式信息用于显示示例和生成规则
+                from rockcoder.permissions.rules import extract_content
+                content = extract_content(tc.tool_name, tc.arguments)
+                pattern_prefix, example_desc = self._extract_pattern_info(tc.tool_name, content)
                 # 向调用方 yield 权限请求事件，由调用方处理
                 yield PermissionRequest(
                     tool_name=tc.tool_name,
                     description=desc,
                     future=future,
+                    pattern_prefix=pattern_prefix,
+                    command_prefix=example_desc,
                 )
                 response = await future
 
@@ -1071,12 +1119,22 @@ class Agent:
                 if response == PermissionResponse.ALLOW_ALWAYS:
                     from rockcoder.permissions.rules import Rule, extract_content
                     content = extract_content(tc.tool_name, tc.arguments)
-                    pattern = f"{content[:60]}*" if len(content) > 60 else f"{content}*"
+                    # 精确匹配：不添加通配符
+                    pattern = content
                     # 持久化规则写入本地文件
                     rule = Rule(tool_name=tc.tool_name, pattern=pattern, effect="allow")
                     self.permission_checker.rule_engine.append_local_rule(rule)
                     # 同时加入会话级放行集合，本轮立即生效无需磁盘读取
                     self.permission_checker.add_session_allow(tc.tool_name, content)
+
+                elif response == PermissionResponse.ALLOW_ALL_TYPE:
+                    from rockcoder.permissions.rules import Rule
+                    # 使用之前提取的 pattern_prefix，添加通配符
+                    pattern = pattern_prefix + " *" if tc.tool_name == "Bash" else pattern_prefix
+                    rule = Rule(tool_name=tc.tool_name, pattern=pattern, effect="allow")
+                    self.permission_checker.rule_engine.append_local_rule(rule)
+                    # 会话级放行使用相同的模式
+                    self.permission_checker.add_session_allow(tc.tool_name, pattern)
 
         try:
             params = tool.params_model.model_validate(tc.arguments)

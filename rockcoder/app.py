@@ -1947,7 +1947,11 @@ class RockCoderApp(App):
         from rockcoder.permission_dialog import InlinePermissionWidget
 
         chat = self.query_one("#chat-area", VerticalScroll)
-        widget = InlinePermissionWidget(request.tool_name, request.description)
+        widget = InlinePermissionWidget(
+            request.tool_name,
+            request.description,
+            request.command_prefix
+        )
         self._pending_perm_request = request
         await chat.mount(widget)
         self.call_after_refresh(chat.scroll_end, animate=False)
